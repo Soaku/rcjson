@@ -205,13 +205,125 @@ struct JSONParser {
 
     }
 
+    /// Get the next string.
+    /// Throws: `JSONException` if the next item isn't a string.
+    /// Returns: The matched string in UTF-16, because JSON uses it to encode strings.
+    wstring getString() {
+
+        skipSpace();
+
+        wstring result;
+        size_t startLine = lineNumber;
+
+        // Require a quotation mark
+        enforce!JSONException(input.skipOver(`"`), "Expected string");
+
+        // Read next characters
+        loop: while (true) {
+
+            enforce!JSONException(!input.empty, startLine.format!"Unclosed string starting at line %s");
+
+            // Don't accept control codes
+            enforce!JSONException(input.front >= 20,
+                failMsg("Illegal control point in a string, use an escape code instead"));
+
+            switch (input.front) {
+
+                // Closing the string
+                case '"':
+
+                    input.popFront;
+                    break loop;
+
+                // Escape code
+                case '\\':
+
+                    result ~= getEscape();
+                    break;
+
+                // Line breaks
+                case '\r', '\n':
+
+                    import std.conv : to;
+
+                    result ~= getLineBreaks().to!wstring;
+                    break;
+
+                // Other characters
+                default:
+
+                    result ~= input.front;
+                    input.popFront();
+
+            }
+
+        }
+
+        return result;
+
+    }
+
+    /// Parse the next escape code in the JSON.
+    /// Returns: The escaped character.
+    private wchar getEscape() {
+
+        assert(input.empty, "getEscape called with empty input");
+        assert(input.front == '\\', "getEscape called, but no escape code was found");
+
+        // Pop the backslash
+        input.popFront();
+
+        // Message to throw in case of failure
+        string eofError() { return failMsg("Reached end of file in the middle of an escape code"); }
+
+        enforce!JSONException(!input.empty, eofError);
+
+        // Match the first character of the escape code
+        const ch = input.front;
+        input.popFront();
+
+        switch (ch) {
+
+            // Obvious escape codes
+            case '"', '\\', '/': return cast(wchar) ch;
+
+            // Special
+            case 'b': return '\b';
+            case 'f': return '\f';
+            case 'n': return '\n';
+            case 'r': return '\r';
+            case 't': return '\t';
+            case 'u':
+
+                import std.conv : to;
+
+                // Take next 4 characters
+                auto code = input.take(4).to!string;
+
+                // Must be 4 characters
+                enforce!JSONException(code.length == 4, eofError);
+
+                // Now, create the character
+                return code.to!ushort(16);
+
+            default:
+
+                throw new JSONException(
+                    failMsg(ch.format!"Unknown escape code '\\%s'")
+                );
+
+
+        }
+
+    }
+
     /// Skips over line breaks and advances line count.
     /// Returns: Matched line breaks.
-    private dstring getLineBreaks() {
+    private string getLineBreaks() {
 
         import std.stdio : writeln;
 
-        dstring match = "";
+        string match = "";
 
         /// Last matched separator
         dchar lineSep;
@@ -236,8 +348,6 @@ struct JSONParser {
 
                 // Update the lineSep char
                 lineSep = input.front;
-
-                // Pop the character
                 input.popFront();
 
                 // Continue parsing
@@ -363,9 +473,43 @@ unittest {
     // Checking types early
     assert(json.peekType == JSONParser.Type.array);
 
-    /* foreach (index; json.getArray) { */
+    // Now, let's get into the contents of the array
+    foreach (index; json.getArray) {
 
-    /* } */
+        with (JSONParser.Type)
+        switch (json.peekType) {
+
+            case string:
+
+                // We have two strings, at indexes 0 and 1
+                if (index == 0) assert(json.getString == "hello");
+                if (index == 1) assert(json.getString == "world");
+                break;
+
+            case boolean:
+
+                // The only boolean in our array is "true"
+                assert(json.getBoolean);
+                break;
+
+            case number:
+
+                // Now we've got a number
+                assert(json.getNumber!int == 123);
+                break;
+
+            case object:
+
+                // Objects are more complex
+                break;
+
+            default:
+
+                assert(0);
+
+        }
+
+    }
 
 }
 
@@ -422,5 +566,17 @@ unittest {
         json.getArray.map!(i => json.getBoolean).array.collectExceptionMsg
         == "Expected a comma between array elements on line 1"
     );
+
+}
+
+unittest {
+
+    auto json = JSONParser(q{"hello
+
+
+world"});
+
+    assert(json.getString == "hello\n\nworld");
+    assert(json.lineNumber == 4);
 
 }
