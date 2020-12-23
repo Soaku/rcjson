@@ -1,0 +1,11 @@
+{
+	"authors": [
+		"soaku"
+	],
+	"copyright": "Copyright © 2020, soaku",
+	"description": "A simple JSON parser",
+	"license": "BSL-1.0",
+	"name": "rcjson",
+	"targetType": "library",
+	"targetPath": "build"
+}
