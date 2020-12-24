@@ -90,6 +90,85 @@ struct JSONParser {
 
     }
 
+    // TODO: switchType
+
+    /// Get a value of the matching type.
+    /// Params:
+    ///     T = Built-in type expected to be returned, or an element of the `Type` enum.
+    template get(T) {
+
+        // Boolean
+        static if (is(T : bool) || (is(T == enum) && T == Type.boolean)) {
+            alias get = getBoolean;
+        }
+
+        // Number 1
+        else static if (isNumeric!T) {
+            alias get = getNumber!T;
+        }
+
+        // Number 2
+        else static if (is(T == enum) && T == Type.number) {
+            alias get = getNumber!float;
+        }
+
+        // String
+        else static if (isSomeString!T) {
+            T get() {
+                import std.conv : to;
+                return getString.to!T;
+            }
+        }
+
+        // String 2
+        else static if (is(T == enum) && T == Type.string) {
+            alias get = getString;
+        }
+
+        // TODO: arrays and objects
+        else static assert(0, T.format!"Type %s is currently unsupported by get()");
+
+    }
+
+    /// Skip the next value in the JSON.
+    /// Throws: `JSONException` on syntax error.
+    void skipValue() {
+
+        const nextType = peekType();
+        final switch (nextType) {
+
+            case Type.null_:
+                getNull();
+                break;
+
+            case Type.boolean:
+                getBoolean();
+                break;
+
+            case Type.number:
+                getNumber!string;
+                break;
+
+            case Type.string:
+                getString();
+                break;
+
+            case Type.array:
+
+                // Skip all values
+                foreach (index; getArray) skipValue();
+                break;
+
+            case Type.object:
+
+                // Skip all values
+                foreach (key; getObject) skipValue();
+                break;
+
+        }
+
+    }
+
     /// Expect the next value to be null and skip to the next value.
     ///
     /// Despite the name, this function doesn't return.
@@ -224,6 +303,8 @@ struct JSONParser {
             enforce!JSONException(!input.empty, startLine.format!"Unclosed string starting at line %s");
 
             // Don't accept control codes
+            enforce!JSONException(input.front != 10,
+                failMsg("JSON strings cannot contain line feeds, use \n instead."));
             enforce!JSONException(input.front >= 20,
                 failMsg("Illegal control point in a string, use an escape code instead"));
 
@@ -239,14 +320,6 @@ struct JSONParser {
                 case '\\':
 
                     result ~= getEscape();
-                    break;
-
-                // Line breaks
-                case '\r', '\n':
-
-                    import std.conv : to;
-
-                    result ~= getLineBreaks().to!wstring;
                     break;
 
                 // Other characters
@@ -267,7 +340,7 @@ struct JSONParser {
     /// Returns: The escaped character.
     private wchar getEscape() {
 
-        assert(input.empty, "getEscape called with empty input");
+        assert(!input.empty, "getEscape called with empty input");
         assert(input.front == '\\', "getEscape called, but no escape code was found");
 
         // Pop the backslash
@@ -362,6 +435,100 @@ struct JSONParser {
 
     }
 
+    /// Get array elements by iterating over them.
+    ///
+    /// Note: You must read exactly one array item per iteration, otherwise the generator will crash.
+    ///
+    /// Throws: `JSONException` if the next item isn't an array or there's a syntax error.
+    /// Returns: A generator range yielding current array index until all the items are read.
+    auto getArray() {
+
+        import std.concurrency : Generator, yield;
+
+        skipSpace();
+
+        // Expect an array opening
+        enforce!JSONException(input.skipOver("["), failFoundMsg("Expected an array"));
+
+        return new Generator!size_t({
+
+            size_t index;
+
+            // Skip over space
+            skipSpace();
+
+            // Check the contents
+            while (!input.skipOver("]")) {
+
+                // Require a comma after non-zero indexes
+                enforce!JSONException(
+                    !index || input.skipOver(","),
+                    failMsg("Expected a comma between array elements")
+                );
+
+                // Expect an item
+                yield(index++);
+
+                skipSpace();
+
+            }
+
+        });
+
+    }
+
+    /// Get object contents by iterating over them.
+    ///
+    /// Note: You must read exactly one item per key, otherwise the generator will crash.
+    ///
+    /// Throws: `JSONException` on type mismatch or syntax error.
+    /// Returns: A generator yielding the found key, in document order.
+    auto getObject() {
+
+        import std.concurrency : Generator, yield;
+
+        skipSpace();
+
+        // Expect an array opening
+        enforce!JSONException(input.skipOver("{"), failFoundMsg("Expected an object"));
+
+        return new Generator!wstring({
+
+            skipSpace();
+
+            bool first = true;
+
+            // Check the contents
+            while (!input.skipOver("}")) {
+
+                // If this isn't the first item
+                if (!first) {
+
+                    // Require a comma
+                    enforce!JSONException(input.skipOver(","), failFoundMsg("Expected a comma between object items"));
+
+                }
+                else first = false;
+
+                // Read the key
+                auto key = getString();
+
+                // Expect a colon
+                skipSpace();
+                enforce!JSONException(input.skipOver(":"), failFoundMsg("Expected a colon after object key"));
+
+                // Pass the key to the item
+                yield(key);
+
+                // Skip space
+                skipSpace();
+
+            }
+
+        });
+
+    }
+
     /// Skip whitespace in the document.
     private void skipSpace() {
 
@@ -391,49 +558,10 @@ struct JSONParser {
 
     }
 
-    /// Get array elements by iterating over them.
-    /// Throws: `JSONException` if the next item isn't an array.
-    /// Returns: A generator range yielding current array index.
-    auto getArray() {
-
-        import std.concurrency : Generator, yield;
-
-        skipSpace();
-
-        // Expect an array opening
-        enforce!JSONException(input.skipOver("["), failFoundMsg("Expected array"));
-
-        return new Generator!size_t({
-
-            size_t index;
-
-            // Skip over space
-            skipSpace();
-
-            // Check the contents
-            while (!input.skipOver("]")) {
-
-                // Require a comma after non-zero indexes
-                enforce!JSONException(
-                    !index || input.skipOver(","),
-                    failMsg("Expected a comma between array elements")
-                );
-
-                // Expect an item
-                yield(index++);
-
-            }
-
-        });
-
-    }
-
     /// Fail with given message and include a line number.
     private string failMsg(string msg) {
 
-        throw new JSONException(
-            msg.format!"%s on line %s"(lineNumber)
-        );
+        return msg.format!"%s on line %s"(lineNumber);
 
     }
 
@@ -449,7 +577,6 @@ struct JSONParser {
 
 }
 
-///
 unittest {
 
     auto json = JSONParser(q{
@@ -500,7 +627,22 @@ unittest {
 
             case object:
 
-                // Objects are more complex
+                wstring[] keys;
+
+                // Iterate over object items
+                foreach (key; json.getObject) {
+
+                    if (key == "undefined") json.getNull();
+                    else if (key == "int") assert(json.getNumber!int == 123);
+                    else json.skipValue();
+
+                    keys ~= key;
+
+                }
+
+                // Checked the keys, all in order
+                assert(keys == ["undefined"w, "int"w, "negative"w, "float"w]);
+
                 break;
 
             default:
@@ -508,6 +650,52 @@ unittest {
                 assert(0);
 
         }
+
+    }
+
+}
+
+///
+unittest {
+
+    auto json = JSONParser(q{
+        [
+            {
+                "name": "John",
+                "surname": "Doe",
+                "age": 42
+            },
+            {
+                "name": "Jane",
+                "surname": "Doe",
+                "age": 46
+            }
+        ]
+    });
+
+    // Check each array item
+    foreach (index; json.getArray) {
+
+        // Read the object
+        auto keys = json.getObject;
+
+        // Check the name
+        assert(keys.front == "name");
+        json.skipValue();
+        keys.popFront();
+
+        // Surname
+        assert(keys.front == "surname");
+        assert(json.getString == "Doe");
+        keys.popFront();
+
+        // Age
+        assert(keys.front == "age");
+        assert(json.getNumber!uint > 40);
+        keys.popFront();
+
+        // Done
+        assert(keys.empty);
 
     }
 
@@ -571,12 +759,27 @@ unittest {
 
 unittest {
 
-    auto json = JSONParser(q{"hello
+    auto text = q{
+        123 "hello, world" 123.124
+    };
+
+    auto jsonA = JSONParser(text);
+    auto jsonB = JSONParser(text);
+    assert(jsonA.get!int == jsonB.getNumber!int);
+    assert(jsonA.get!wstring == jsonB.getString);
+    assert(jsonA.get!float == jsonB.getNumber!float);
 
 
-world"});
 
-    assert(json.getString == "hello\n\nworld");
-    assert(json.lineNumber == 4);
+}
+
+unittest {
+
+    auto json1 = JSONParser(`"\uD834\uDD1E"`);
+    assert(json1.getString == "\U0001D11E");
+
+    import std.stdio : writefln;
+    auto json2 = JSONParser(`"\u0020\u000A\n\t"`);
+    assert(json2.getString == " \n\n\t");
 
 }
