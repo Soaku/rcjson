@@ -126,7 +126,16 @@ struct JSONParser {
             alias get = getString;
         }
 
-        // TODO: arrays and objects
+        // Arrays
+        else static if (is(T == U[], U)) {
+            alias get = getArray!U;
+        }
+
+        // Objects
+        else static if (is(T == struct) || is(T == class)) {
+            alias get = getStruct!T;
+        }
+
         else static assert(0, fullyQualifiedName!T.format!"Type %s is currently unsupported by get()");
 
     }
@@ -379,6 +388,31 @@ struct JSONParser {
 
     }
 
+    /// Get an array of elements matching the type.
+    ///
+    /// Throws: `JSONException` if there's a type mismatch or syntax error.
+    /// Params:
+    T[] getArray(T)() {
+
+        T[] result;
+        foreach (index; getArray) {
+
+            result ~= get!T;
+
+        }
+
+        return result;
+
+    }
+
+    ///
+    unittest {
+
+        auto json = JSONParser(q{ ["test", "foo", "bar"] });
+        assert(json.getArray!string == ["test", "foo", "bar"]);
+
+    }
+
     /// Get object contents by iterating over them.
     ///
     /// Note: You must read exactly one item per key, otherwise the generator will crash.
@@ -440,11 +474,12 @@ struct JSONParser {
     ///
     /// The struct or class must have a no argument constructor available.
     ///
+    /// Throws: `JSONException` if there's a type mismatch or syntax error.
     /// Params:
     ///     T = Type of the struct.
     ///     fallback = Function to call if a field doesn't exist. Otherwise, it will be ignored.
     /// Returns: A struct or class.
-    T getStruct(T)(void delegate(wstring) fallback = null)
+    T getStruct(T)(void delegate(ref T, wstring) fallback = null)
     if (is(T == struct) || is(T == class)) {
 
         static if (is(T == struct)) {
@@ -465,19 +500,24 @@ struct JSONParser {
             // Match struct fields
             fields: switch (key.to!string) {
 
-                static foreach (i, field; FieldNameTuple!T) {
+                static foreach (i, field; FieldNameTuple!T) {{
 
-                    case field.chomp("_"):
+                    alias FieldType = FieldTypes[i];
+                    static if (__traits(compiles, get!FieldType)) {
 
-                        __traits(getMember, obj, field) = get!(FieldTypes[i]);
-                        break fields;
+                        case field.chomp("_"):
 
-                }
+                            __traits(getMember, obj, field) = get!FieldType;
+                            break fields;
+
+                    }
+
+                }}
 
                 default:
 
                     // If the fallback isn't null, call it
-                    if (fallback !is null) fallback(key);
+                    if (fallback !is null) fallback(obj, key);
 
                     // Otherwise just skip the value
                     else skipValue();
@@ -493,10 +533,38 @@ struct JSONParser {
     ///
     unittest {
 
+        struct Table {
+
+            string tableName;
+            string[string] attributes;
+
+        }
+
+        auto json = JSONParser(q{
+            {
+                "tableName": "Player",
+                "id": "PRIMARY KEY INT",
+                "name": "VARCHAR(30)",
+                "xp": "INT"
+            }
+        });
+
+        auto table = json.getStruct!Table((ref Table table, wstring key) {
+
+            import std.conv : to;
+            table.attributes[key.to!string] = json.getString.to!string;
+
+        });
+
+    }
+
+    ///
+    unittest {
+
         struct Example {
             string name;
             int version_;
-            //string[] contents;  // not implemented yet
+            string[] contents;  // not implemented yet
         }
 
         auto json = JSONParser(q{
@@ -509,6 +577,7 @@ struct JSONParser {
         const obj = json.getStruct!Example;
         assert(obj.name == "rcjson");
         assert(obj.version_ == 123);
+        assert(obj.contents == ["json-parser"]);
 
     }
 
@@ -783,6 +852,41 @@ unittest {
 
 }
 
+/// Moving to struct with a helper
+unittest {
+
+    struct Person {
+
+        string name;
+        string surname;
+        uint age;
+
+    }
+
+    auto json = JSONParser(q{
+        [
+            {
+                "name": "John",
+                "surname": "Doe",
+                "age": 42
+            },
+            {
+                "name": "Jane",
+                "surname": "Doe",
+                "age": 46
+            }
+        ]
+    });
+
+    auto people = json.getArray!Person;
+
+    assert(people[0].name == "John");
+    assert(people[1].name == "Jane");
+    assert(people[0].age == 42);
+    assert(people[1].age == 46);
+
+}
+
 unittest {
 
     foreach (num; [
@@ -863,5 +967,49 @@ unittest {
     import std.stdio : writefln;
     auto json2 = JSONParser(`"\u0020\u000A\n\t"`);
     assert(json2.getString == " \n\n\t");
+
+}
+
+unittest {
+
+    struct A {
+
+        struct B {
+
+            string foo;
+            string bar;
+
+        }
+
+        string name;
+        int number = 1;
+        B sampleTexts;
+        string[] notes;
+
+    }
+
+    auto json = JSONParser(q{
+        {
+            "name": "library",
+            "sampleTexts": {
+                "foo": "Dolorem ipsum, quia dolor sit",
+                "bar": "amet, consectetur, adipisci velit"
+            },
+            "notes": [
+                "hello,",
+                "world!"
+            ]
+        }
+    });
+
+    import std.string : startsWith;
+
+    auto a = json.getStruct!A;
+
+    assert(a.name == "library");
+    assert(a.number == 1);
+    assert(a.sampleTexts.foo.startsWith("Dolorem ipsum"));
+    assert(a.sampleTexts.bar.startsWith("amet"));
+    assert(a.notes == ["hello,", "world!"]);
 
 }
