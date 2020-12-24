@@ -305,7 +305,7 @@ struct JSONParser {
         size_t startLine = lineNumber;
 
         // Require a quotation mark
-        enforce!JSONException(input.skipOver(`"`), "Expected string");
+        enforce!JSONException(input.skipOver(`"`), failFoundMsg("Expected string"));
 
         // Read next characters
         loop: while (true) {
@@ -374,7 +374,7 @@ struct JSONParser {
                 // Require a comma after non-zero indexes
                 enforce!JSONException(
                     !index || input.skipOver(","),
-                    failMsg("Expected a comma between array elements")
+                    failFoundMsg("Expected a comma between array elements")
                 );
 
                 // Expect an item
@@ -477,30 +477,35 @@ struct JSONParser {
     /// Throws: `JSONException` if there's a type mismatch or syntax error.
     /// Params:
     ///     T = Type of the struct.
+    ///     obj = Instance of the object to modify. Classes are edited in place, structs are not.
     ///     fallback = Function to call if a field doesn't exist. Otherwise, it will be ignored.
-    /// Returns: A struct or class.
-    T getStruct(T)(void delegate(ref T, wstring) fallback = null)
+    /// Returns:
+    ///     1. If T is a struct, a copy of the given object with updated properties.
+    ///     2. If T is a class, a reference to the given object. (ret is obj)
+    T updateStruct(T)(T obj, void delegate(ref T, wstring) fallback = null)
     if (is(T == struct) || is(T == class)) {
-
-        static if (is(T == struct)) {
-            auto obj = T();
-        }
-        else {
-            auto obj = new T();
-        }
 
         // Expect an object
         foreach (key; getObject) {
 
-            import std.string : chomp;
             import std.conv : to;
+            import std.string : chomp;
+            import std.meta : AliasSeq, staticMap;
 
-            alias FieldTypes = Fields!T;
+            // Check parents
+            static if (is(T == class)) {
+                alias FullT = AliasSeq!(BaseClassesTuple!T, T);
+            }
+            else {
+                alias FullT = T;
+            }
+
+            alias FieldTypes = staticMap!(Fields, FullT);
 
             // Match struct fields
             fields: switch (key.to!string) {
 
-                static foreach (i, field; FieldNameTuple!T) {{
+                static foreach (i, field; staticMap!(FieldNameTuple, FullT)) {{
 
                     alias FieldType = FieldTypes[i];
                     static if (__traits(compiles, get!FieldType)) {
@@ -530,7 +535,45 @@ struct JSONParser {
 
     }
 
+    /// Ditto
+    T getStruct(T)(void delegate(ref T, wstring) fallback = null) {
+
+        // Create the object
+        static if (is(T == struct)) {
+            auto obj = T();
+        }
+        else {
+            auto obj = new T();
+        }
+
+        return updateStruct!T(obj, fallback);
+
+    }
+
     ///
+    unittest {
+
+        struct Example {
+            string name;
+            int version_;
+            string[] contents;  // not implemented yet
+        }
+
+        auto json = JSONParser(q{
+            {
+                "name": "rcjson",
+                "version": 123,
+                "contents": ["json-parser"]
+            }
+        });
+        const obj = json.getStruct!Example;
+        assert(obj.name == "rcjson");
+        assert(obj.version_ == 123);
+        assert(obj.contents == ["json-parser"]);
+
+    }
+
+    /// Using fallback
     unittest {
 
         struct Table {
@@ -558,26 +601,90 @@ struct JSONParser {
 
     }
 
-    ///
-    unittest {
+    /// Copy the parser. Useful to keep document data for later.
+    JSONParser save() {
 
-        struct Example {
+        return this;
+
+    }
+
+    /// Saving parser state
+    unittest {
+        auto json = JSONParser(q{
+            [
+                {
+                    "name": "A",
+                    "ability": "doFoo",
+                    "health": 30
+                },
+                {
+                    "name": "B",
+                    "ability": "doBar"
+                },
+                {
+                    "name": "C",
+                    "inherits": ["A", "B"],
+                    "ability": "doTest"
+                }
+            ]
+        });
+
+        static class EntityMeta {
             string name;
-            int version_;
-            string[] contents;  // not implemented yet
+            string[] inherits;
         }
 
-        auto json = JSONParser(q{
-            {
-                "name": "rcjson",
-                "version": 123,
-                "contents": ["json-parser"]
+        static class Entity : EntityMeta {
+            string ability;
+            int health = 100;
+        }
+
+        JSONParser[string] states;
+        Entity[string] entities;
+        foreach (index; json.getArray) {
+
+            // Get the metadata and save the state
+            auto state = json.save;
+            auto meta = json.getStruct!EntityMeta;  // Efficient and quick way to fetch the two attributes
+            states[meta.name] = state.save;
+
+            // Create the object
+            auto entity = new Entity();
+
+            // Inherit properties
+            foreach (parent; meta.inherits) {
+
+                // Get the parent
+                auto parentState = states[parent].save;
+
+                // Inherit its values
+                parentState.updateStruct(entity);
+                // Note: We're operating on classes. Use `entity = state.getStruct(entity)` on structs
+
             }
-        });
-        const obj = json.getStruct!Example;
-        assert(obj.name == "rcjson");
-        assert(obj.version_ == 123);
-        assert(obj.contents == ["json-parser"]);
+
+            // Now, add local data
+            state.updateStruct(entity);
+
+            entities[entity.name] = entity;
+
+        }
+
+        const a = entities["A"];
+        assert(a.name == "A");
+        assert(a.ability == "doFoo");
+        assert(a.health == 30);
+
+        const b = entities["B"];
+        assert(b.name == "B");
+        assert(b.ability == "doBar");
+        assert(b.health == 100);
+
+        const c = entities["C"];
+        assert(c.name == "C");
+        assert(c.ability == "doTest");
+        assert(c.health == 30);  // A had explicitly stated health, B did not — inherited from A.
+                                 // Otherwise impossible without saving states.
 
     }
 
@@ -938,7 +1045,7 @@ unittest {
 
     assert(
         json.getArray.map!(i => json.getBoolean).array.collectExceptionMsg
-        == "Expected a comma between array elements on line 1"
+        == "Expected a comma between array elements, found boolean on line 1"
     );
 
 }
