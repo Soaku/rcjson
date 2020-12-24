@@ -9,7 +9,3 @@ rcjson is a simple JSON pull parser written according to [RFC](https://tools.iet
 * Range-based and lazy.
 * Boost licensed.
 * May eventually implement serialization in a similar fashion.
-
-## Notes
-
-* `rcjson` is guaranteed to be `pure @safe` but **not** `nothrow @nogc`.

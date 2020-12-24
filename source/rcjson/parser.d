@@ -9,6 +9,8 @@ import std.exception;
 
 import rcjson.misc;
 
+pure:
+
 /// Struct for parsing JSON.
 struct JSONParser {
 
