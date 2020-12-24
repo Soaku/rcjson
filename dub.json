@@ -3,9 +3,10 @@
 		"soaku"
 	],
 	"copyright": "Copyright © 2020, soaku",
-	"description": "A simple JSON parser",
+	"description": "A simple JSON pull parser",
 	"license": "BSL-1.0",
 	"name": "rcjson",
+	"version": "1.0.0-alpha",
 	"targetType": "library",
 	"targetPath": "build"
 }
