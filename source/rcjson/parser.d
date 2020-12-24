@@ -1,3 +1,4 @@
+///
 module rcjson.parser;
 
 import std.range;
@@ -126,7 +127,7 @@ struct JSONParser {
         }
 
         // TODO: arrays and objects
-        else static assert(0, T.format!"Type %s is currently unsupported by get()");
+        else static assert(0, fullyQualifiedName!T.format!"Type %s is currently unsupported by get()");
 
     }
 
@@ -336,6 +337,181 @@ struct JSONParser {
 
     }
 
+    /// Get array elements by iterating over them.
+    ///
+    /// Note: You must read exactly one array item per iteration, otherwise the generator will crash.
+    ///
+    /// Throws: `JSONException` if the next item isn't an array or there's a syntax error.
+    /// Returns: A generator range yielding current array index until all the items are read.
+    auto getArray() {
+
+        import std.concurrency : Generator, yield;
+
+        skipSpace();
+
+        // Expect an array opening
+        enforce!JSONException(input.skipOver("["), failFoundMsg("Expected an array"));
+
+        return new Generator!size_t({
+
+            size_t index;
+
+            // Skip over space
+            skipSpace();
+
+            // Check the contents
+            while (!input.skipOver("]")) {
+
+                // Require a comma after non-zero indexes
+                enforce!JSONException(
+                    !index || input.skipOver(","),
+                    failMsg("Expected a comma between array elements")
+                );
+
+                // Expect an item
+                yield(index++);
+
+                skipSpace();
+
+            }
+
+        });
+
+    }
+
+    /// Get object contents by iterating over them.
+    ///
+    /// Note: You must read exactly one item per key, otherwise the generator will crash.
+    ///
+    /// Throws: `JSONException` on type mismatch or syntax error.
+    /// Returns: A generator yielding the found key, in document order.
+    auto getObject() {
+
+        import std.concurrency : Generator, yield;
+
+        skipSpace();
+
+        // Expect an array opening
+        enforce!JSONException(input.skipOver("{"), failFoundMsg("Expected an object"));
+
+        return new Generator!wstring({
+
+            skipSpace();
+
+            bool first = true;
+
+            // Check the contents
+            while (!input.skipOver("}")) {
+
+                // If this isn't the first item
+                if (!first) {
+
+                    // Require a comma
+                    enforce!JSONException(input.skipOver(","), failFoundMsg("Expected a comma between object items"));
+
+                }
+                else first = false;
+
+                // Read the key
+                auto key = getString();
+
+                // Expect a colon
+                skipSpace();
+                enforce!JSONException(input.skipOver(":"), failFoundMsg("Expected a colon after object key"));
+
+                // Pass the key to the item
+                yield(key);
+
+                // Skip space
+                skipSpace();
+
+            }
+
+        });
+
+    }
+
+    /// Push object contents into a struct or class.
+    ///
+    /// The object doesn't have to contain all fields defined in the struct or class.
+    ///
+    /// Fields that share names with D reserved keywords can be suffixed with `_`, as according to the
+    /// $(LINK2 https://dlang.org/dstyle.html#naming_keywords, D style).
+    ///
+    /// The struct or class must have a no argument constructor available.
+    ///
+    /// Params:
+    ///     T = Type of the struct.
+    ///     fallback = Function to call if a field doesn't exist. Otherwise, it will be ignored.
+    /// Returns: A struct or class.
+    T getStruct(T)(void delegate(wstring) fallback = null)
+    if (is(T == struct) || is(T == class)) {
+
+        static if (is(T == struct)) {
+            auto obj = T();
+        }
+        else {
+            auto obj = new T();
+        }
+
+        // Expect an object
+        foreach (key; getObject) {
+
+            import std.string : chomp;
+            import std.conv : to;
+
+            alias FieldTypes = Fields!T;
+
+            // Match struct fields
+            fields: switch (key.to!string) {
+
+                static foreach (i, field; FieldNameTuple!T) {
+
+                    case field.chomp("_"):
+
+                        __traits(getMember, obj, field) = get!(FieldTypes[i]);
+                        break fields;
+
+                }
+
+                default:
+
+                    // If the fallback isn't null, call it
+                    if (fallback !is null) fallback(key);
+
+                    // Otherwise just skip the value
+                    else skipValue();
+
+            }
+
+        }
+
+        return obj;
+
+    }
+
+    ///
+    unittest {
+
+        struct Example {
+            string name;
+            int version_;
+            //string[] contents;  // not implemented yet
+        }
+
+        auto json = JSONParser(q{
+            {
+                "name": "rcjson",
+                "version": 123,
+                "contents": ["json-parser"]
+            }
+        });
+        const obj = json.getStruct!Example;
+        assert(obj.name == "rcjson");
+        assert(obj.version_ == 123);
+
+    }
+
     /// Parse the next escape code in the JSON.
     /// Returns: The escaped character.
     private wchar getEscape() {
@@ -432,100 +608,6 @@ struct JSONParser {
 
         // Return the match
         return match;
-
-    }
-
-    /// Get array elements by iterating over them.
-    ///
-    /// Note: You must read exactly one array item per iteration, otherwise the generator will crash.
-    ///
-    /// Throws: `JSONException` if the next item isn't an array or there's a syntax error.
-    /// Returns: A generator range yielding current array index until all the items are read.
-    auto getArray() {
-
-        import std.concurrency : Generator, yield;
-
-        skipSpace();
-
-        // Expect an array opening
-        enforce!JSONException(input.skipOver("["), failFoundMsg("Expected an array"));
-
-        return new Generator!size_t({
-
-            size_t index;
-
-            // Skip over space
-            skipSpace();
-
-            // Check the contents
-            while (!input.skipOver("]")) {
-
-                // Require a comma after non-zero indexes
-                enforce!JSONException(
-                    !index || input.skipOver(","),
-                    failMsg("Expected a comma between array elements")
-                );
-
-                // Expect an item
-                yield(index++);
-
-                skipSpace();
-
-            }
-
-        });
-
-    }
-
-    /// Get object contents by iterating over them.
-    ///
-    /// Note: You must read exactly one item per key, otherwise the generator will crash.
-    ///
-    /// Throws: `JSONException` on type mismatch or syntax error.
-    /// Returns: A generator yielding the found key, in document order.
-    auto getObject() {
-
-        import std.concurrency : Generator, yield;
-
-        skipSpace();
-
-        // Expect an array opening
-        enforce!JSONException(input.skipOver("{"), failFoundMsg("Expected an object"));
-
-        return new Generator!wstring({
-
-            skipSpace();
-
-            bool first = true;
-
-            // Check the contents
-            while (!input.skipOver("}")) {
-
-                // If this isn't the first item
-                if (!first) {
-
-                    // Require a comma
-                    enforce!JSONException(input.skipOver(","), failFoundMsg("Expected a comma between object items"));
-
-                }
-                else first = false;
-
-                // Read the key
-                auto key = getString();
-
-                // Expect a colon
-                skipSpace();
-                enforce!JSONException(input.skipOver(":"), failFoundMsg("Expected a colon after object key"));
-
-                // Pass the key to the item
-                yield(key);
-
-                // Skip space
-                skipSpace();
-
-            }
-
-        });
 
     }
 
