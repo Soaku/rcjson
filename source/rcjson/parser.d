@@ -131,6 +131,18 @@ struct JSONParser {
             alias get = getArray!U;
         }
 
+        // Associative arrays
+        else static if (is(T == U[wstring], U)) {
+            alias get = getAssoc!U;
+        }
+
+        else static if (is(T == U[Y], U, Y) && isSomeString!Y) {
+            T get() {
+                import std.conv : to;
+                return getAssoc!U.to!T;
+            }
+        }
+
         // Objects
         else static if (is(T == struct) || is(T == class)) {
             alias get = getStruct!T;
@@ -413,6 +425,40 @@ struct JSONParser {
 
     }
 
+    /// Get an associative array from the JSON.
+    /// Throws: `JSONException` on type mismatch or syntax error.
+    /// Returns: The requested associative array.
+    T[wstring] getAssoc(T)() {
+
+        T[wstring] result;
+        foreach (key; getObject) {
+
+            result[key] = get!T;
+
+        }
+        return result;
+
+    }
+
+    ///
+    unittest {
+
+        auto json = JSONParser(q{
+            {
+                "hello": 123,
+                "foo": -123,
+                "test": 42.123
+            }
+        });
+
+        auto assoc = json.getAssoc!float;
+
+        assert(assoc["hello"] == 123);
+        assert(assoc["foo"] == -123);
+        assert(assoc["test"] == 42.123f);
+
+    }
+
     /// Get object contents by iterating over them.
     ///
     /// Note: You must read exactly one item per key, otherwise the generator will crash.
@@ -592,6 +638,7 @@ struct JSONParser {
             }
         });
 
+        // Using fallback
         auto table = json.getStruct!Table((ref Table table, wstring key) {
 
             import std.conv : to;
