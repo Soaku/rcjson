@@ -554,7 +554,7 @@ struct JSONParser {
                 static foreach (i, field; staticMap!(FieldNameTuple, FullT)) {{
 
                     alias FieldType = FieldTypes[i];
-                    static if (__traits(compiles, get!FieldType)) {
+                    static if (!hasUDA!(mixin("T." ~ field), JSONExclude) &&  __traits(compiles, get!FieldType)) {
 
                         case field.chomp("_"):
 
@@ -602,7 +602,7 @@ struct JSONParser {
         struct Example {
             string name;
             int version_;
-            string[] contents;  // not implemented yet
+            string[] contents;
         }
 
         auto json = JSONParser(q{
@@ -625,6 +625,8 @@ struct JSONParser {
         struct Table {
 
             string tableName;
+
+            @JSONExclude
             string[string] attributes;
 
         }
@@ -634,17 +636,22 @@ struct JSONParser {
                 "tableName": "Player",
                 "id": "PRIMARY KEY INT",
                 "name": "VARCHAR(30)",
-                "xp": "INT"
+                "xp": "INT",
+                "attributes": "VARCHAR(60)"
             }
         });
 
-        // Using fallback
         auto table = json.getStruct!Table((ref Table table, wstring key) {
 
             import std.conv : to;
             table.attributes[key.to!string] = json.getString.to!string;
 
         });
+
+        assert(table.tableName == "Player");
+        assert(table.attributes["id"] == "PRIMARY KEY INT");
+        assert(table.attributes["xp"] == "INT");
+        assert(table.attributes["attributes"] == "VARCHAR(60)");
 
     }
 
