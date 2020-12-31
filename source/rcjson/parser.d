@@ -131,6 +131,11 @@ struct JSONParser {
             alias get = getArray!U;
         }
 
+        // Static arrays
+        else static if (is(T == U[N], U, size_t N)) {
+            alias get = getArray!T;
+        }
+
         // Associative arrays
         else static if (is(T == U[wstring], U)) {
             alias get = getAssoc!U;
@@ -403,7 +408,6 @@ struct JSONParser {
     /// Get an array of elements matching the type.
     ///
     /// Throws: `JSONException` if there's a type mismatch or syntax error.
-    /// Params:
     T[] getArray(T)() {
 
         T[] result;
@@ -422,6 +426,52 @@ struct JSONParser {
 
         auto json = JSONParser(q{ ["test", "foo", "bar"] });
         assert(json.getArray!string == ["test", "foo", "bar"]);
+
+    }
+
+    /// Get a static array of elements matching the type.
+    /// Throws: `JSONException` if there's a type mismatch or syntax error.
+    T getArray(T : Element[Size], Element, size_t Size)() {
+
+        T result;
+        foreach (index; getArray) {
+
+            result[index] = get!Element;
+
+        }
+        return result;
+
+    }
+
+    ///
+    unittest {
+
+        auto text = q{ [1, 2, 3] };
+
+        {
+            auto json = JSONParser(text);
+            auto values = json.getArray!(uint[3]);
+
+            static assert(is(typeof(values) == uint[3]));
+            assert(values == [1, 2, 3]);
+        }
+
+        {
+            auto json = JSONParser(text);
+            auto values = json.getArray!(uint, 3);
+
+            static assert(is(typeof(values) == uint[3]));
+            assert(values == [1, 2, 3]);
+
+        }
+
+    }
+
+    /// Get a static array of elements matching the types.
+    /// Throws: `JSONException` if there's a type mismatch or syntax error.
+    Element[Size] getArray(Element, size_t Size)() {
+
+        return getArray!(Element[Size]);
 
     }
 
@@ -554,7 +604,7 @@ struct JSONParser {
                 static foreach (i, field; staticMap!(FieldNameTuple, FullT)) {{
 
                     alias FieldType = FieldTypes[i];
-                    static if (!hasUDA!(mixin("T." ~ field), JSONExclude) &&  __traits(compiles, get!FieldType)) {
+                    static if (!hasUDA!(mixin("T." ~ field), JSONExclude)) {
 
                         case field.chomp("_"):
 
@@ -1172,5 +1222,21 @@ unittest {
     assert(a.sampleTexts.foo.startsWith("Dolorem ipsum"));
     assert(a.sampleTexts.bar.startsWith("amet"));
     assert(a.notes == ["hello,", "world!"]);
+
+}
+
+unittest {
+
+    struct Test {
+
+        int[3] test;
+
+    }
+
+    auto text = q{ { "test": [1, 2, 3] } };
+    auto json = JSONParser(text);
+
+    auto obj = json.getStruct!Test;
+    assert(obj.test == [1, 2, 3]);
 
 }
