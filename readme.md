@@ -1,5 +1,9 @@
 # rcjson
 
+**Deprecated** in favor of [rcserial:json](https://github.com/Soaku/rcserial).
+
+---
+
 rcjson is a simple JSON pull parser written according to [RFC](https://tools.ietf.org/html/rfc8259).
 
 ## Why another?

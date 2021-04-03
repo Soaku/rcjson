@@ -10,6 +10,7 @@ import std.exception;
 import rcjson.misc;
 
 /// Struct for parsing JSON.
+deprecated("rcjson has been deprecated in favor of rcserial:json. Please update your dub package and imports.")
 struct JSONParser {
 
     /// Type of a JSON value
